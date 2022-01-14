@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: yaml to create the infra
+
+Resources:
+    S3Bucket:
+      Type: AWS::S3::Bucket
+      Properties: 
+        AccessControl: Private
+        Tags: 
+          - Key: "env"
+            Value: "developer"
+
+    IAMManagedPolicy:
+        DependsOn: S3Bucket
+        Type: "AWS::IAM::ManagedPolicy"
+        Properties:
+            ManagedPolicyName: "sns-kinesis-policy"
+            Path: "/"
+            PolicyDocument: !Sub |
+                {
+                  "Version": "2012-10-17",
+                  "Statement": [
+                    {
+                      "Action": [
+                        "firehose:DescribeDeliveryStream",
+                        "firehose:ListDeliveryStreams",
+                        "firehose:ListTagsForDeliveryStream",
+                        "firehose:PutRecord",
+                        "firehose:PutRecordBatch"
+                      ],
+                      "Resource": [
+                        "arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/*"
+                      ],
+                      "Effect": "Allow"
+                    }
+                  ]
+                }
+    
+    IAMRole:
+        Type: "AWS::IAM::Role"
+        DependsOn: IAMManagedPolicy
+        Properties:
+            Path: "/"
+            RoleName: "exec-role-sns"
+            AssumeRolePolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+              - Effect: Allow
+                Principal:
+                  Service: sns.amazonaws.com
+                Action: sts:AssumeRole
+            
+            MaxSessionDuration: 3600
+            ManagedPolicyArns: 
+              - "arn:aws:iam::aws:policy/service-role/AmazonSNSRole"
+              - !Sub "arn:aws:iam::${AWS::AccountId}:policy/sns-kinesis-policy"
+            Description: "Allows SNS to call CloudWatch Logs on your behalf."
+            
+    SNSTopic:
+        Type: "AWS::SNS::Topic"
+        Properties:
+            DisplayName: ""
+            TopicName: "created-consumer"
+
+    SQSQueue:
+        Type: "AWS::SQS::Queue"
+        Properties:
+            DelaySeconds: 0
+            MaximumMessageSize: 262144
+            MessageRetentionPeriod: 345600
+            ReceiveMessageWaitTimeSeconds: 0
+            VisibilityTimeout: 30
+            QueueName: "api-orders-created-consumer"
+
+    SQSQueue2:
+        Type: "AWS::SQS::Queue"
+        Properties:
+            DelaySeconds: 0
+            MaximumMessageSize: 262144
+            MessageRetentionPeriod: 345600
+            ReceiveMessageWaitTimeSeconds: 0
+            VisibilityTimeout: 30
+            QueueName: "api-payment-created-consumer"
+
+
+    KinesisFirehoseDeliveryStream:
+        Type: "AWS::KinesisFirehose::DeliveryStream"
+        DependsOn:
+        - SNSTopic
+        - IAMRole
+        Properties:
+            DeliveryStreamName: "created-customer"
+            DeliveryStreamType: "DirectPut"
+            S3DestinationConfiguration: 
+                BucketARN: !GetAtt
+                  - S3Bucket
+                  - Arn
+                BufferingHints: 
+                    SizeInMBs: 5
+                    IntervalInSeconds: 60
+                CloudWatchLoggingOptions: 
+                    Enabled: true
+                    LogGroupName: "/aws/kinesisfirehose/created-customer"
+                    LogStreamName: "DestinationDelivery"
+                CompressionFormat: "UNCOMPRESSED"
+                EncryptionConfiguration: 
+                    NoEncryptionConfig: "NoEncryption"
+                Prefix: "messages/created-consumer/landing_date=!{timestamp:YYYY}-!{timestamp:MM}-!{timestamp:dd}/"
+                ErrorOutputPrefix: "messages/created-consumer/erros/!{firehose:error-output-type}/landing_date=!{timestamp:YYYY}-!{timestamp:MM}-!{timestamp:dd}/"
+                RoleARN: !Sub "arn:aws:iam::${AWS::AccountId}:role/service-role/KinesisFirehoseServiceRole-created-custo-${AWS::Region}-1641963925925"
+
+    SNSSubscription:
+        DependsOn:
+        - SNSTopic
+        - SQSQueue
+        Type: "AWS::SNS::Subscription"
+        Properties:
+            TopicArn: !Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:created-consumer"
+            Endpoint: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:api-orders-created-consumer"
+            Protocol: "sqs"
+            RawMessageDelivery: false
+            Region: !Ref AWS::Region
+
+    SNSSubscription2:
+        DependsOn:
+        - SNSTopic
+        - SQSQueue2
+        Type: "AWS::SNS::Subscription"
+        Properties:
+            TopicArn: !Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:created-consumer"
+            Endpoint: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:api-payment-created-consumer"
+            Protocol: "sqs"
+            RawMessageDelivery: false
+            Region: !Ref AWS::Region
+
+    SNSSubscription3:
+      DependsOn:
+        - SNSTopic
+        - KinesisFirehoseDeliveryStream
+      Type: "AWS::SNS::Subscription"
+      Properties:
+          TopicArn: !Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:created-consumer"
+          Endpoint: !Sub "arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/created-consumer"
+          Protocol: "firehose"
+          Region: !Ref AWS::Region
+          SubscriptionRoleArn: !GetAtt
+            - IAMRole
+            - Arn
