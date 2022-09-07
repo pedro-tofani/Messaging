@@ -12,7 +12,7 @@ The application is based on an hypothetical e-commerce website requests. The inf
 * SQS queue - api-payment-created-payment: a queue that will store the messages and can be consumed by payment API.
 * Kineses Data Firehose: a kinese instance that we receive the messages and store then for a few moments (or until a size limit is reached) and then save then into the S3 bucket.
 
-![infra](images/infra.png)
+![infra](images/infra_messaging.png)
 
 First there is a topic that represents a consumer created. Every time that a new message is created by this topic it is broadcasted and the queues of orders and payments stores it, and than they are ready to be consumed by APIs, for example. To generate a message it is needed to run "message.py" (this script creates a message every five seconds).
 To simulate a queue message consumption run "consume.py" file. It fakes a message receive by some API (payment and order).
